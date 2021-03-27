@@ -1,29 +1,7 @@
-#include <stdio.h>
-#include <string.h>
-#include <sys/socket.h>
-#include <arpa/inet.h>
-#include <sys/types.h>
-#include <unistd.h>
-#include <netinet/in.h>
-#include <netdb.h>
-#include <stdlib.h>
-#include <sys/select.h>
-#include <sys/stat.h>
-#include <sys/sendfile.h>
-#include <fcntl.h>
-#include <pwd.h>
-#include <ctype.h>
-#include <dirent.h>
-#include <errno.h>
-#define PORT 9000
-
-#define MAX_USERS 20
-#define MAX_CLIENTS 8
-char user_list[MAX_USERS][20];
-char pass_list[MAX_USERS][20]; 
+#include "FTPheader.h"
 
 int serveClient(int client_fd,short *uauth,short *auth,int *p0,int *p1)
-{ 
+{
 	char message[100];
 	char sermessage[100];
 	char cmd[10];
@@ -57,24 +35,24 @@ int serveClient(int client_fd,short *uauth,short *auth,int *p0,int *p1)
 		{
 			if (*uauth>0)
 			{
-				if (strcmp("NULL",pass_list[*uauth-1])==0)
+				if (strcmp("NULL",message+5)==0)
+					strcpy(sermessage,"Passcode Invalid");
+				else
 				{
-					if (strcmp("NULL",message+5)==0)
-						strcpy(sermessage,"Please use another PASS");
-					else
+					if (strcmp("NULL",pass_list[*uauth-1])==0)
 					{
-						strcpy(message+5,pass_list[*uauth-1]);
+						strcpy(pass_list[*uauth-1],message+5);
 						strcpy(sermessage,"New PASS assigned to the USER");
 						*auth = *uauth;
 					}
+					else if (strcmp(message+5,pass_list[*uauth-1])==0)
+					{
+						*auth=*uauth;
+						strcpy(sermessage,"Authentication Complete");
+					}
+					else
+						strcpy(sermessage,"Wrong password");
 				}
-				else if (strcmp(message+5,pass_list[*uauth-1])==0)
-				{
-					*auth=*uauth;
-					strcpy(sermessage,"Authentication Complete");
-				}
-				else
-					strcpy(sermessage,"Wrong password");
 			}
 			else
 				strcpy(sermessage,"Set USER first");
@@ -99,8 +77,9 @@ int serveClient(int client_fd,short *uauth,short *auth,int *p0,int *p1)
 				{
 					if (strlen(message)>5)
 					{
-						strcpy(user_list[++*p1],message+5);
-						strcpy(pass_list[  *p1],"NULL");
+						strcpy(user_list[*p1],message+5);
+						strcpy(pass_list[*p1],"NULL");
+						*p1 = *p1 + 1;
 						*uauth = *p1;
 						strcpy(sermessage,"USER created, use PASS to set your password");
 					}
@@ -120,6 +99,68 @@ int serveClient(int client_fd,short *uauth,short *auth,int *p0,int *p1)
 				}
 				else if(!strcmp(cmd,"PUT"))
 				{
+					int tport = PORT + client_fd + *p0;
+					if(fork() == 0)
+					{
+						struct sockaddr_in serverAddress,clientAddress;
+						serverAddress.sin_family = AF_INET;
+						serverAddress.sin_addr.s_addr = INADDR_ANY;
+						serverAddress.sin_port = htons(tport);
+						int tserver_fd = socket(AF_INET, SOCK_STREAM, 0);
+						if (tserver_fd < 0)
+						{
+							printf("Socket ERROR\n");
+							strcpy(sermessage,"Socket ERROR");
+							send(client_fd,sermessage,strlen(sermessage),0);
+							return 0;
+						}
+						if (bind(tserver_fd, (struct sockaddr *) &serverAddress, sizeof(serverAddress))<0) 
+						{
+							*p0 = (*p0+MAX_CLIENTS)%(MAX_CLIENTS*32); // does not work for a mysterious reason, resets to 0 when serveClient is called
+							printf("Bind ERROR\n");
+							strcpy(sermessage,"Bind ERROR");
+							close(tserver_fd);
+							send(client_fd,sermessage,strlen(sermessage),0);
+							return 0;
+						}
+						if (listen(tserver_fd, 5) < 0)
+						{
+							printf("Listen ERROR\n");
+							strcpy(sermessage,"Listen ERROR");
+							close(tserver_fd);
+							send(client_fd,sermessage,strlen(sermessage),0);
+							return 0;
+						}
+						int tsock = accept(tserver_fd,NULL,NULL);
+						if (tsock < 0) 
+						{
+							printf("Accept ERROR\n");
+							strcpy(sermessage,"Accept ERROR");
+							send(tsock,sermessage,strlen(sermessage),0);
+							close(tsock);
+							close(tserver_fd);
+							return 0;
+						}
+						else
+						{
+							int fp = open(message+4,O_CREAT|O_WRONLY,0666);
+							if(fp != -1)
+							{
+								memset(message,0,sizeof(message));
+								while(recv(tsock,message,sizeof(message)-1,0)>0)
+								{
+									write(fp, message, strlen(message));
+									memset(message,0,sizeof(message));
+								}
+							}
+							else printf("File ERROR\n");
+							close(fp);
+						}
+						close(tsock);
+						close(tserver_fd);
+						return 0;
+					}
+					else{sprintf(sermessage,"%s %d","existed",tport);}
 				}
 				else if(!strcmp(cmd,"GET"))
 				{
@@ -145,8 +186,7 @@ int serveClient(int client_fd,short *uauth,short *auth,int *p0,int *p1)
 								}
 								if (bind(tserver_fd, (struct sockaddr *) &serverAddress, sizeof(serverAddress))<0) 
 								{
-									*p0 = (*p0+MAX_CLIENTS)%(MAX_CLIENTS*32);
-									printf("%i\n",*p0);
+									*p0 = (*p0+MAX_CLIENTS); // does not work for a mysterious reason, resets to 0 when serveClient is called
 									printf("Bind ERROR\n");
 									strcpy(sermessage,"Bind ERROR");
 									close(tserver_fd);
@@ -327,8 +367,8 @@ int main()
 				}
 				else
 				{
-					quit = serveClient(j,&(UAUTH[j]),&(AUTH[j]),&p[0],&p[1]);
-					if (quit) 
+					quit = serveClient(j,&(UAUTH[j]),&(AUTH[j]),&(p[0]),&(p[1]));
+					if (quit==1) 
 						{p[2]--;FD_CLR(j,&full_fdset);break;}
 				}
 			}

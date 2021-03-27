@@ -1,21 +1,4 @@
-#include <stdio.h>
-#include <string.h>
-#include <sys/socket.h>
-#include <arpa/inet.h>
-#include <sys/types.h>
-#include <unistd.h>
-#include <netinet/in.h>
-#include <netdb.h>
-#include <stdlib.h>
-#include <sys/select.h>
-#include <sys/stat.h>
-#include <sys/sendfile.h>
-#include <fcntl.h>
-#include <pwd.h>
-#include <ctype.h>
-#include <dirent.h>
-#include <errno.h>
-#define PORT 9000
+#include "FTPheader.h"
 
 int main(int argc,char* argv[])
 {
@@ -59,20 +42,12 @@ int main(int argc,char* argv[])
 			fgets(message,100,stdin);
 			message[strcspn(message,"\n")]=0; //lets add it
 			sscanf(message,"%s",cmd);
-			if(!strcmp(cmd,"QUIT") || !strcmp(cmd,"USER")|| !strcmp(cmd,"PASS") || !strcmp(cmd,"PRINT") || !strcmp(cmd,"LS") || !strcmp(cmd,"CD") || !strcmp(cmd,"PWD"))
+			if(!strcmp(cmd,"QUIT") || !strcmp(cmd,"USER")|| !strcmp(cmd,"PASS") || !strcmp(cmd,"PRINT") || !strcmp(cmd,"LS") || !strcmp(cmd,"CD") || !strcmp(cmd,"PWD") || !strcmp(cmd,"NEWU"))
 				sending = 1;
 			else if(!strcmp(cmd,"PUT"))
 			{
-				if(!strlen(message+4)) printf("Please enter a file name");
-				else if(access(message+4,F_OK)!=-1)
-					{
-						FILE* fp = fopen(message+4,"r");
-						if(fp != NULL)
-						{
-							sending == 1;
-						}
-						else printf("Couldn't open file");
-					}
+				if(!strlen(message+4)) printf("Please enter a file name\n");
+				else if(access(message+4,F_OK)!=-1) sending = 1;
 				else printf("No file with such name exists\n");
 			}
 			else if(!strcmp(cmd,"GET"))
@@ -109,39 +84,41 @@ int main(int argc,char* argv[])
 				else
 				{
 					sscanf(sermessage,"%s",cmd);
-					if(!strcmp(cmd,"existed") && strlen(sermessage)<15)
+					if(!strcmp(cmd,"existed") && strlen(sermessage)<15) // makes sure there is no issue serverside
 					{
 						// socket
 						int tserver_fd = socket(AF_INET,SOCK_STREAM,0);
 						if(tserver_fd<0)
-								printf("Socket ERROR\n");
-						printf("%s\n",sermessage);
-						char tport[4];
-						struct sockaddr_in serverAddress;
-						memset(&serverAddress,0,sizeof(serverAddress));
-						serverAddress.sin_family = AF_INET;
-						bcopy((char *)server->h_addr_list[0], (char *)&serverAddress.sin_addr.s_addr, server->h_length);
-						sscanf(sermessage+8,"%s",tport);
-						serverAddress.sin_port = htons(atoi(tport));
-						// connect
-						if(connect(tserver_fd,(struct sockaddr*)&serverAddress,sizeof(serverAddress))<0)
-							printf("Connect ERROR\n");
+							printf("Socket ERROR\n");
 						else
-						{
-							int fp = open(message+4,O_CREAT|O_WRONLY,0666);
-							if(fp != -1)
+						{	
+							char tport[6];
+							struct sockaddr_in serverAddress;
+							memset(&serverAddress,0,sizeof(serverAddress));
+							serverAddress.sin_family = AF_INET;
+							bcopy((char *)server->h_addr_list[0], (char *)&serverAddress.sin_addr.s_addr, server->h_length);
+							sscanf(sermessage+8,"%s",tport);
+							serverAddress.sin_port = htons(atoi(tport));
+							// connect
+							if(connect(tserver_fd,(struct sockaddr*)&serverAddress,sizeof(serverAddress))<0)
+								printf("Connect ERROR\n");
+							else
 							{
-								memset(sermessage,0,sizeof(sermessage));
-								while(recv(tserver_fd,sermessage,sizeof(sermessage)-1,0)>0)
+								int fp = open(message+4,O_CREAT|O_WRONLY,0666);
+								if(fp != -1)
 								{
-									write(fp, sermessage, strlen(sermessage));
 									memset(sermessage,0,sizeof(sermessage));
+									while(recv(tserver_fd,sermessage,sizeof(sermessage)-1,0)>0)
+									{
+										write(fp, sermessage, strlen(sermessage));
+										memset(sermessage,0,sizeof(sermessage));
+									}
 								}
+								else printf("File ERROR\n"); 
+								close(fp);
+								close(tserver_fd);
+								printf("File received\n");
 							}
-							else printf("File ERROR\n"); 
-							close(fp);
-							close(tserver_fd);
-							printf("File received\n");
 						}
 					}
 					else printf("%s\n",sermessage);
@@ -149,7 +126,54 @@ int main(int argc,char* argv[])
 			}
 			if(!strcmp(cmd,"PUT"))
 			{
-				
+				if(!strcmp(sermessage,"nonexisted")) printf("ERROR\n");
+				else
+				{
+					sscanf(sermessage,"%s",cmd);
+					if(!strcmp(cmd,"existed") && strlen(sermessage)<15) //makes sure there is no issue serverside
+					{
+						// socket
+						int tserver_fd = socket(AF_INET,SOCK_STREAM,0);
+						if(tserver_fd<0)
+								printf("Socket ERROR\n");
+						else
+						{	
+							char tport[6];
+							struct sockaddr_in serverAddress;
+							memset(&serverAddress,0,sizeof(serverAddress));
+							serverAddress.sin_family = AF_INET;
+							bcopy((char *)server->h_addr_list[0], (char *)&serverAddress.sin_addr.s_addr, server->h_length);
+							sscanf(sermessage+8,"%s",tport);
+							serverAddress.sin_port = htons(atoi(tport));
+							// connect
+							if(connect(tserver_fd,(struct sockaddr*)&serverAddress,sizeof(serverAddress))<0)
+								printf("Connect ERROR\n");
+							else
+							{
+								FILE* fp = fopen(message+4,"r");
+								if(fp!=NULL)
+								{	
+									char path [1024];
+									int nFlag = 0;
+									do
+									{
+										strcpy(path,"");
+										if(fgets(path,1024,fp) != NULL)
+											strcpy(message,path);
+										else nFlag = 1;
+										send(tserver_fd,message,strlen(message),0);
+										strcpy(message,"");
+									} while (!nFlag);
+									fclose(fp);
+								}
+								else printf("File ERROR\n");
+							}
+							printf("%s\n", "File sent\n");
+							close(tserver_fd);
+						}
+					}
+					else printf("%s\n",sermessage);
+				}
 			}
 		}
 	}
